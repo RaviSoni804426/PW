@@ -1,0 +1,353 @@
+openapi: 3.0.3
+
+# The contract the central backend must implement for OngoingRec laptops to
+# talk to it. `mockbackend/` is a working reference implementation of exactly
+# this document; run it with `python -m mockbackend` to develop against.
+#
+# Direction of travel: every call is made BY the laptop TO the backend. That
+# is not a style preference. Counsellor laptops are behind NAT on networks the
+# backend cannot route into and have no stable address, so the backend cannot
+# initiate anything. It parks a job on a queue and the laptop comes to collect
+# it. This also supplies the routing PRD section 23 assumes: the backend knows
+# which employee ID belongs to which laptop because the laptop said so when it
+# enrolled.
+
+info:
+  title: PW OngoingRec Backend API
+  version: "1.0.0"
+  description: |
+    Endpoints the OngoingRec recording agent calls on the central backend.
+
+    ## Authentication
+
+    Two credentials, with different lifetimes and blast radius.
+
+    The **enrollment key** is shared across the fleet and ships inside the
+    installer. It is only ever accepted by `POST /devices/register`. Treat it
+    as public-ish: anything shipped to thousands of laptops will eventually be
+    extracted from one of them, so it must not grant access to any recording.
+
+    The **device token** is unique per laptop, issued at registration, and
+    required by every other endpoint. The agent stores it DPAPI-encrypted and
+    deletes its copy of the enrollment key once registration succeeds, so a
+    stolen laptop yields only its own token.
+
+    Recommended on the backend side: rotate the enrollment key periodically,
+    and require a human or an MDM record to approve a registration before its
+    token becomes usable.
+
+servers:
+  - url: https://backend.example.com
+    description: Replace with the real base URL; it goes in the installer.
+
+security:
+  - deviceToken: []
+
+paths:
+  /devices/register:
+    post:
+      summary: Enrol a laptop and issue its device token
+      description: |
+        Called once, on the first poll cycle after installation. Must be
+        idempotent on `install_id`: a laptop that registers again (because its
+        token was lost, or the config was restored from a backup) should be
+        recognised rather than duplicated.
+
+        The backend records the `email_id` and `employee_id` reported here.
+        That mapping is what later lets an operator ask for EMP002's audio
+        without knowing anything about which machine EMP002 uses.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enrollment_key, install_id, email_id, employee_id]
+              properties:
+                enrollment_key:
+                  type: string
+                  description: Fleet-wide key from the installer.
+                install_id:
+                  type: string
+                  format: uuid
+                  description: Stable identifier generated at install time.
+                email_id:
+                  type: string
+                  format: email
+                employee_id:
+                  type: string
+                hostname:
+                  type: string
+                os_version:
+                  type: string
+                agent_version:
+                  type: string
+      responses:
+        "200":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [device_token]
+                properties:
+                  device_token:
+                    type: string
+                    description: Per-device credential for all other endpoints.
+                  registered_at:
+                    type: string
+                    format: date-time
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401":
+          description: Enrollment key rejected.
+
+  /devices/heartbeat:
+    post:
+      summary: Report that this laptop is alive and recording
+      description: |
+        Sent every few minutes. This is the only way to distinguish a laptop
+        that is switched off from one that is running but failing to capture
+        audio -- a distinction that otherwise only surfaces when someone asks
+        for a clip and there is none.
+
+        Worth alerting on: `recording: false`, or `last_segment_end` falling
+        further behind now than a segment length.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                install_id: { type: string }
+                email_id: { type: string }
+                employee_id: { type: string }
+                agent_version: { type: string }
+                recording:
+                  type: boolean
+                  description: Whether audio is being captured right now.
+                device:
+                  type: string
+                  nullable: true
+                  description: Microphone currently in use.
+                last_segment_end:
+                  type: string
+                  format: date-time
+                  nullable: true
+                segment_count: { type: integer }
+                retention_hours: { type: integer }
+      responses:
+        "200":
+          description: Acknowledged
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /jobs/poll:
+    get:
+      summary: Collect pending clip requests (long poll)
+      description: |
+        The backend should hold this connection open for up to `wait` seconds
+        and return as soon as a job is queued for this `install_id`, so a
+        laptop reacts within seconds without polling in a tight loop. Return
+        an empty `jobs` array when the wait elapses; the agent immediately
+        reconnects.
+
+        Jobs may be returned more than once -- after a timeout, a lost
+        response, or a laptop restart mid-job. The agent deduplicates on
+        `job_id`, so at-least-once delivery is safe and expected.
+      parameters:
+        - name: install_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: wait
+          in: query
+          required: false
+          description: Seconds to hold the connection open.
+          schema: { type: integer, default: 30, minimum: 0, maximum: 120 }
+      responses:
+        "200":
+          description: Zero or more jobs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs:
+                    type: array
+                    items: { $ref: "#/components/schemas/Job" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: Token does not match the requested install_id.
+
+  /jobs/{job_id}/clip:
+    post:
+      summary: Deliver the finished audio clip
+      description: |
+        Multipart with two parts: `clip`, the MP3, and `metadata`, JSON
+        describing it.
+
+        The metadata is not optional detail. A clip cannot describe itself:
+        the backend needs `clip_start` and `clip_end` to know what window it
+        actually received, and `gaps` to know which stretches inside that
+        window were never recorded. Assuming a returned clip covers exactly
+        the requested window is the mistake this field exists to prevent --
+        it will not, whenever the laptop was asleep or the request landed near
+        the edge of what had been recorded.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [clip, metadata]
+              properties:
+                clip:
+                  type: string
+                  format: binary
+                  description: audio/mpeg
+                metadata:
+                  $ref: "#/components/schemas/ClipMetadata"
+      responses:
+        "200":
+          description: Accepted
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404":
+          description: Unknown job_id.
+
+  /jobs/{job_id}/error:
+    post:
+      summary: Report that a job cannot be fulfilled
+      description: |
+        Sent when the requested audio does not exist, or after repeated
+        failures. Reporting matters: without it the backend cannot tell a
+        recording that never happened from a laptop that is simply switched
+        off, and would wait forever on both.
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  enum: [NO_RECORDING, EXTRACT_FAILED, UPLOAD_FAILED, INVALID_REQUEST]
+                  description: |
+                    * `NO_RECORDING` - the window has passed and no audio was
+                      captured in it. Permanent; the agent will not retry.
+                    * `EXTRACT_FAILED` - audio exists but the clip could not
+                      be produced. Retried, then reported.
+                    * `UPLOAD_FAILED` - reported only after the retry budget
+                      is exhausted.
+                    * `INVALID_REQUEST` - the job's timestamp was unusable.
+                detail:
+                  type: string
+      responses:
+        "200":
+          description: Acknowledged
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+components:
+  securitySchemes:
+    deviceToken:
+      type: http
+      scheme: bearer
+      description: The per-device token issued by /devices/register.
+
+  responses:
+    Unauthorized:
+      description: Missing, unknown, or revoked device token.
+    BadRequest:
+      description: Required fields missing or malformed.
+
+  schemas:
+    Job:
+      type: object
+      required: [job_id, timestamp]
+      properties:
+        job_id:
+          type: string
+          description: |
+            Stable idempotency key. The agent will fulfil a given job_id
+            exactly once no matter how often it is delivered.
+        timestamp:
+          type: string
+          description: |
+            ISO-8601 moment of interest. Include an offset or a `Z` whenever
+            possible. A naive value is interpreted as the *laptop's* local
+            time, which is usually what an operator means but is worth being
+            explicit about for a fleet spanning timezones.
+          example: "2026-08-12T11:22:15Z"
+        window_seconds:
+          type: integer
+          nullable: true
+          description: |
+            Total clip length, centred on `timestamp`. Omit to use the
+            laptop's configured default (600 seconds: five minutes either
+            side, per PRD section 17).
+          example: 600
+
+    ClipMetadata:
+      type: object
+      description: Describes what the accompanying audio actually contains.
+      properties:
+        job_id: { type: string }
+        install_id: { type: string }
+        email_id: { type: string }
+        employee_id: { type: string }
+        requested_at:
+          type: string
+          description: The timestamp asked for, resolved to UTC.
+        window_seconds:
+          type: integer
+          description: The window asked for.
+        clip_start:
+          type: string
+          description: |
+            UTC time of the first sample actually returned. May be later than
+            `requested_at - window/2` when the request reached back past the
+            start of recorded audio.
+        clip_end:
+          type: string
+          description: UTC time just past the last sample returned.
+        duration_seconds: { type: number }
+        segment_ids:
+          type: array
+          items: { type: integer }
+          description: |
+            Which stored segments the clip was cut from. More than one means
+            the window crossed a 30-minute boundary (PRD section 18).
+        gaps:
+          type: array
+          description: |
+            Stretches inside the clip for which no audio was ever recorded --
+            laptop asleep, microphone unplugged, service restarting. These are
+            filled with silence so that offsets within the clip still
+            correspond to real elapsed time. Without that padding the timeline
+            would silently compress and any conclusion about *when* something
+            was said would be wrong.
+          items:
+            type: object
+            properties:
+              start: { type: string }
+              end: { type: string }
+              seconds: { type: number }
+        gap_seconds: { type: number }
+        partial:
+          type: boolean
+          description: |
+            True when the clip is shorter than requested or contains gaps.
+            Worth surfacing to whoever reads the audio, so a short clip is not
+            mistaken for a complete one.

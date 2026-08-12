@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Build output
+build/
+dist/
+installer/Output/
+installer/vendor/          # ffmpeg binaries fetched by build.ps1
+
+# Local runtime state
+mock-uploads/
+recordings/
+*.log
+
+# Never commit these: they hold a device token and a fleet enrollment key
+config.json
+secrets.bin
+
+# Editors / OS / tooling
+.vscode/
+.idea/
+.claude/
+.DS_Store
