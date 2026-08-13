@@ -176,13 +176,16 @@ class Database:
     recorder writes.
     """
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, read_only: bool = False):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
+        if not read_only:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._init_lock = threading.Lock()
-        with self._init_lock:
-            self._migrate()
+        if not read_only:
+            with self._init_lock:
+                self._migrate()
 
     # -- connection -------------------------------------------------------
 
@@ -190,18 +193,33 @@ class Database:
     def conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.execute("PRAGMA busy_timeout=30000")
-            conn.execute("PRAGMA foreign_keys=ON")
+            if self.read_only:
+                # The service writes this database as LocalSystem, which leaves
+                # it owned by Administrators with everyone else read-only. A
+                # support engineer running `status` or `fetch` as themselves
+                # would otherwise get "attempt to write a readonly database"
+                # from the migration, before doing anything that needs to write.
+                uri = "file:" + self.path.as_posix() + "?mode=ro"
+                conn = sqlite3.connect(uri, uri=True, timeout=30.0, isolation_level=None)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA busy_timeout=30000")
+            else:
+                conn = sqlite3.connect(self.path, timeout=30.0, isolation_level=None)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.execute("PRAGMA busy_timeout=30000")
+                conn.execute("PRAGMA foreign_keys=ON")
             self._local.conn = conn
         return conn
 
     def close(self) -> None:
         conn = getattr(self._local, "conn", None)
         if conn is None:
+            return
+        if self.read_only:
+            conn.close()
+            self._local.conn = None
             return
         try:
             # Fold the WAL back into the main file so a cleanly stopped

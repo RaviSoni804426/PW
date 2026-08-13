@@ -114,6 +114,10 @@ across a recording gap, and after a clock jump.
 .venv/bin/pytest -q          # ~145 tests, about a minute
 ```
 
+The tests encode real MP3s, so ffmpeg has to be findable — on PATH, or via
+`ONGOINGREC_FFMPEG` and `ONGOINGREC_FFPROBE`. Without it about a third of them
+fail, and the reason is a captured log line rather than the assertion.
+
 The watermark survives 32 kbps MP3 with zero errors, which is why it can be
 trusted as the oracle.
 

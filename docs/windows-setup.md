@@ -41,7 +41,16 @@ python -m venv .venv
 .venv\Scripts\ongoingrec devices
 ```
 
-Now run it as the service, which is the actual question:
+`installer\session0-spike.ps1` does the rest of this section end to end — install,
+record, measure, remove — and prints a verdict. From an ADMINISTRATOR PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\session0-spike.ps1 -FfmpegSource <dir>
+```
+
+`-FfmpegSource` is any directory holding `ffmpeg.exe` and `ffprobe.exe`; after
+`installer\build.ps1` has run once, `installer\vendor` is one. To do it by hand
+instead:
 
 ```powershell
 # From an ADMINISTRATOR PowerShell
@@ -51,11 +60,33 @@ Start-Sleep -Seconds 90
 Get-Service OngoingRec
 ```
 
+Running the service *from a virtualenv* — which is the whole point of doing this
+before there is an exe — needs three things the installed build gets for free.
+Set them on the service's own registry key, because services.exe caches the
+system environment at boot and would not see a machine-wide variable:
+
+```powershell
+$site = "C:\src\PW\.venv\Lib\site-packages"
+$base = & C:\src\PW\.venv\Scripts\python.exe -c "import sys; print(sys.base_prefix)"
+Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\OngoingRec" Environment -Type MultiString -Value @(
+  # pywin32 moves pythonservice.exe into .venv\, but python311.dll stays behind
+  # in the base interpreter. Without this the host dies before Python starts and
+  # the only symptom is error 1053.
+  "PATH=$base;$base\DLLs;C:\src\PW\.venv\Scripts;$env:SystemRoot\system32;$env:SystemRoot",
+  # pythonservice.exe does not read the venv's pyvenv.cfg.
+  "PYTHONPATH=C:\src\PW;$site;$site\win32;$site\win32\lib;$site\Pythonwin",
+  # The shipped build finds ffmpeg beside its own executable; this one cannot.
+  "ONGOINGREC_FFMPEG=<dir>\ffmpeg.exe",
+  "ONGOINGREC_FFPROBE=<dir>\ffprobe.exe"
+)
+```
+
 Then check what it captured:
 
 ```powershell
 Get-Content C:\ProgramData\PW\OngoingRec\logs\ongoingrec.log -Tail 30
 .venv\Scripts\ongoingrec status
+dir C:\ProgramData\PW\OngoingRec\recordings\* -Recurse
 ```
 
 ### Reading the result
@@ -68,6 +99,23 @@ encoder ran, not that the microphone did.
 
 **It does not work** if the log shows `could not open`, `no input devices`, or
 segments that are the right length but silent.
+
+"Silent" is worth measuring rather than eyeballing, since a quiet room and a
+dead capture look identical in a waveform. Digital silence sits near -91 dB:
+
+```powershell
+ffmpeg -hide_banner -i <segment>.mp3 -af volumedetect -f null NUL
+```
+
+### Result so far
+
+Windows 11 Pro 26200, Realtek onboard audio, LocalSystem, run from a source
+checkout: **it works.** The log showed `capturing from Microphone (Realtek(R)
+Audio) (index 1) at 16000 Hz`, a segment opened on the grid, and 97 seconds of
+audio measured `mean_volume: -38.2 dB` / `max_volume: -17.1 dB` — ambient room
+noise, not silence. Session 0 is not a barrier on this configuration, so the
+`capture_in_session_agent` fallback below stays unused until some other machine
+in the fleet says otherwise.
 
 ### If it does not work
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import sqlite3
 import sys
 import uuid
 from datetime import timedelta
@@ -155,14 +156,43 @@ def cmd_run(args) -> int:
 # --------------------------------------------------------------------------
 
 
+def _open_index_read_only(config):
+    """Open the segment index for a command that only ever reads it.
+
+    The service writes as LocalSystem, so on a real installation the index
+    belongs to Administrators and an ordinary user cannot write it. These
+    commands have no business writing anyway, and read-only access is what
+    lets support run them without an elevated prompt. Returns None, having
+    explained itself, when even reading is not permitted.
+    """
+    from .index import Database
+
+    if not config.db_path.exists():
+        print(
+            f"no recording index at {config.db_path}; the service has not run yet",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        return Database(config.db_path, read_only=True)
+    except sqlite3.Error as exc:
+        print(
+            f"cannot read the recording index at {config.db_path}: {exc}\n"
+            f"try again from an elevated prompt.",
+            file=sys.stderr,
+        )
+        return None
+
+
 def cmd_status(args) -> int:
     """What this installation knows about itself, without the service running."""
-    from .index import Database
     from .retention import free_disk_mb
     from .timeutil import format_utc
 
     config = _load_config(args)
-    db = Database(config.db_path)
+    db = _open_index_read_only(config)
+    if db is None:
+        return 1
     latest = db.latest_segment()
     secrets = Secrets.load(config.home)
 
@@ -225,11 +255,12 @@ def cmd_fetch(args) -> int:
     recording is wrong" from "the delivery is wrong" in one command.
     """
     from .extract import ExtractionError, NoRecordingError, extract_clip
-    from .index import Database
     from .timeutil import parse_timestamp
 
     config = _load_config(args)
-    db = Database(config.db_path)
+    db = _open_index_read_only(config)
+    if db is None:
+        return 1
     try:
         clip = extract_clip(
             config,

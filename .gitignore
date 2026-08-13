@@ -10,7 +10,9 @@ venv/
 build/
 dist/
 installer/Output/
-installer/vendor/          # ffmpeg binaries fetched by build.ps1
+# ffmpeg binaries fetched by build.ps1 (a trailing comment would become part
+# of the pattern -- gitignore only treats a line as a comment if it starts with #)
+installer/vendor/
 
 # Local runtime state
 mock-uploads/

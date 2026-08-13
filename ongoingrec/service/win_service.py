@@ -162,7 +162,20 @@ def main() -> int:
         servicemanager.StartServiceCtrlDispatcher()
         return 0
 
-    win32serviceutil.HandleCommandLine(OngoingRecService)
+    # Name the class explicitly rather than letting pywin32 derive it. Left to
+    # itself it asks pickle which module the class came from, gets "__main__"
+    # under ``python -m ongoingrec.service.win_service``, and falls back to the
+    # script's path -- registering the service as a bare "...\win_service".
+    # pythonservice.exe then imports this file as a top-level module, outside
+    # its package, and every relative import above fails with "attempted
+    # relative import with no known parent package". The frozen build is
+    # unaffected either way (pywin32 registers the exe itself and never
+    # consults this string), so this only matters when running from a source
+    # checkout -- which is exactly what the session-0 spike does.
+    win32serviceutil.HandleCommandLine(
+        OngoingRecService,
+        serviceClassString="ongoingrec.service.win_service.OngoingRecService",
+    )
     return 0
 
 

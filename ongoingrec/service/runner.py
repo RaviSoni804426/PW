@@ -167,7 +167,12 @@ class ServiceRunner:
 
     def _api_bind_loop(self) -> None:
         for attempt in range(API_BIND_ATTEMPTS):
-            if self._stop.is_set() or self._start_api_once():
+            try:
+                done = self._start_api_once()
+            except Exception:  # noqa: BLE001 - a dead thread must still say why
+                log.exception("local API startup failed; recording is unaffected")
+                return
+            if self._stop.is_set() or done:
                 return
             if attempt < API_BIND_ATTEMPTS - 1:
                 log.info("retrying the local API bind in %.0fs", API_BIND_RETRY_SECONDS)
@@ -188,19 +193,39 @@ class ServiceRunner:
             log.error("local API unavailable: %s", exc)
             return True  # not a transient failure; retrying cannot help
 
-        context = AppContext(
-            config=self.config, db=self.db, recorder=self.recorder, poller=self.poller
-        )
-        app = create_app(context)
-        server = uvicorn.Server(
-            uvicorn.Config(
-                app,
-                host=self.config.api_host,
-                port=self.config.api_port,
-                log_level="warning",
-                access_log=False,
+        # Building the app and uvicorn's config is not obviously fallible, but
+        # it runs on a background thread: anything raised here would kill that
+        # thread silently and leave the log claiming nothing at all, with the
+        # port simply never opening. Under the frozen service, where there is
+        # no console for a traceback to land on, that is indistinguishable
+        # from the API having been disabled.
+        try:
+            context = AppContext(
+                config=self.config, db=self.db, recorder=self.recorder, poller=self.poller
             )
-        )
+            app = create_app(context)
+            server = uvicorn.Server(
+                uvicorn.Config(
+                    app,
+                    host=self.config.api_host,
+                    port=self.config.api_port,
+                    log_level="warning",
+                    access_log=False,
+                    # Uvicorn's default logging config attaches colourised
+                    # handlers to stdout and stderr, and decides on colour by
+                    # calling sys.stdout.isatty(). A Windows service has no
+                    # console, so sys.stdout is None and merely constructing
+                    # the Config raised -- taking the whole API down while
+                    # recording carried on, which is the hardest kind of
+                    # failure to notice. Declining to configure logging at all
+                    # also puts uvicorn's own messages in ongoingrec.log,
+                    # where anyone debugging this would look for them.
+                    log_config=None,
+                )
+            )
+        except Exception:  # noqa: BLE001 - the API must never stop recording
+            log.exception("local API could not be created; recording is unaffected")
+            return True  # not transient; retrying would fail the same way
         self._api_server = server
 
         def serve() -> None:
