@@ -1,0 +1,35 @@
+# Coolify can deploy this file directly, or just the Dockerfile.
+#
+# No credentials to configure: the service runs open, so anyone who has the URL
+# can fetch a clip. The URL is therefore the secret -- treat it like a password
+# and do not put it anywhere public.
+#
+# To gate it later, set ADMIN_API_KEY (and optionally ENROLLMENT_KEY) in
+# Coolify's environment settings and redeploy. No code change is needed.
+#   python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+services:
+  backend:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /data
+      PORT: 8000
+      LOG_LEVEL: info
+      JOB_RETENTION_DAYS: 30
+      MAX_CLIP_MB: 128
+    volumes:
+      # Named volume, not a bind mount: this holds the device database and
+      # every delivered clip, and losing it means every laptop has to re-enrol.
+      - ongoingrec-data:/data
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  ongoingrec-data:

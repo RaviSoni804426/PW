@@ -110,6 +110,102 @@ class TestRegistration:
             poller.tick()
 
 
+class TestRecoveryFromBackendDataLoss:
+    """What happens when the backend forgets this laptop.
+
+    A backend restored onto an empty volume, or an in-memory one that
+    restarted, no longer recognises any device token. Retrying the rejected
+    token can never succeed, so the laptop has to notice and enrol again --
+    otherwise a single backend redeploy silently ends clip delivery for the
+    whole fleet while every laptop goes on recording perfectly.
+    """
+
+    def _forget_every_device(self, backend) -> None:
+        _, state = backend
+        state.devices.clear()
+        state.by_install.clear()
+        state.by_employee.clear()
+        state.by_email.clear()
+
+    def test_a_forgotten_device_is_rejected(self, poller, backend):
+        poller.tick()
+        self._forget_every_device(backend)
+        with pytest.raises(AuthError):
+            poller.tick()
+
+    def test_a_rejected_token_is_always_thrown_away(self, poller, config, backend):
+        """Even with no enrollment key to re-enrol with. The token has already
+        been refused, so keeping it protects nothing -- and against a backend
+        that leaves registration open, dropping it is what gets the laptop
+        back in."""
+        poller.tick()
+        self._forget_every_device(backend)
+
+        assert poller._discard_rejected_token() is True
+        assert Secrets.load(config.home).device_token == ""
+
+    def test_a_gated_backend_still_refuses_a_laptop_with_no_key(self, poller, config, backend):
+        """Dropping the token does not conjure permission: this mock requires
+        an enrollment key, and the laptop discarded its own after enrolling."""
+        poller.tick()
+        self._forget_every_device(backend)
+        poller._discard_rejected_token()
+
+        assert Secrets.load(config.home).enrollment_key == ""
+        with pytest.raises(AuthError):
+            poller.tick()
+
+    def test_with_a_retained_key_the_laptop_heals_itself(self, config, recorded, backend):
+        http_client, state = backend
+        config.poll_timeout_seconds = 0
+        config.retain_enrollment_key = True
+        Secrets(enrollment_key=DEFAULT_ENROLLMENT_KEY).save(config.home)
+        poller = JobPoller(
+            config, recorded, client_factory=make_client_factory(config, http_client)
+        )
+
+        poller.tick()
+        first_token = Secrets.load(config.home).device_token
+        assert Secrets.load(config.home).enrollment_key == DEFAULT_ENROLLMENT_KEY
+
+        self._forget_every_device(backend)
+        with pytest.raises(AuthError):
+            poller.tick()
+
+        assert poller._discard_rejected_token() is True
+        assert Secrets.load(config.home).device_token == ""
+
+        # The next cycle enrols again, and the laptop is back in service.
+        poller.tick()
+        assert poller.registered
+        assert len(state.by_install) == 1
+        assert Secrets.load(config.home).device_token not in ("", first_token)
+
+    def test_clip_delivery_resumes_after_healing(self, config, recorded, backend):
+        """The point of all of the above: audio flows again afterwards."""
+        http_client, _ = backend
+        config.poll_timeout_seconds = 0
+        config.retain_enrollment_key = True
+        Secrets(enrollment_key=DEFAULT_ENROLLMENT_KEY).save(config.home)
+        poller = JobPoller(
+            config, recorded, client_factory=make_client_factory(config, http_client)
+        )
+
+        poller.tick()
+        self._forget_every_device(backend)
+        with pytest.raises(AuthError):
+            poller.tick()
+        poller._discard_rejected_token()
+        poller.tick()  # re-enrols
+
+        job_id = request_clip(
+            backend, employee_id=config.employee_id, timestamp="2026-08-12T11:22:15Z"
+        )
+        poller.tick()
+        poller.tick()
+        assert job_status(backend, job_id)["status"] == "complete"
+
+
 class TestClipDelivery:
     def test_backend_receives_the_audio_it_asked_for(self, poller, backend, config):
         """The whole product, in one test: identifier plus timestamp in,

@@ -17,7 +17,7 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
-from ..config import Config, Secrets
+from ..config import Config, ConfigError, Secrets
 from ..extract import ExtractionError, NoRecordingError, extract_clip
 from ..index import JOB_DONE, JOB_FAILED, JOB_UPLOADING, Database
 from ..logging_setup import get_logger
@@ -88,7 +88,13 @@ class JobPoller:
                 # still there when the credential problem is sorted out.
                 self.last_error = str(exc)
                 log.error("backend rejected our credentials: %s", exc)
-                self._stop.wait(300)
+                if self._discard_rejected_token():
+                    # Re-enrolment is possible, so try it soon rather than
+                    # sitting out the full penalty for a token the backend has
+                    # simply forgotten.
+                    self._stop.wait(self.config.poll_retry_seconds)
+                else:
+                    self._stop.wait(300)
             except BackendError as exc:
                 self.last_error = str(exc)
                 log.warning("backend unreachable: %s", exc)
@@ -125,13 +131,57 @@ class JobPoller:
         if not secrets.device_token:
             token = self._client.register(secrets.enrollment_key)
             # The enrollment key is fleet-wide; once this laptop has its own
-            # token the key is no longer needed here and is not kept.
-            Secrets(enrollment_key="", device_token=token).save(self.config.home)
+            # token the key is normally no longer needed here and is dropped.
+            # Keeping it is opt-in, for deployments whose backend may lose its
+            # device records -- see Config.retain_enrollment_key.
+            Secrets(
+                enrollment_key=(
+                    secrets.enrollment_key if self.config.retain_enrollment_key else ""
+                ),
+                device_token=token,
+            ).save(self.config.home)
             self._client.device_token = token
 
         self.registered = True
         self.last_error = None
         return self._client
+
+    def _discard_rejected_token(self) -> bool:
+        """Throw away a token the backend no longer accepts, and re-enrol.
+
+        A backend restored onto an empty volume has forgotten every device, so
+        the agent's token is permanently invalid. Retrying it cannot ever
+        work, and a rejected token is worth nothing -- so it is cleared
+        unconditionally and enrolment starts again on the next tick.
+
+        Whether that enrolment succeeds depends on the backend: one that
+        leaves registration open takes this laptop straight back, and one that
+        requires a key accepts it only if the key was retained (see
+        ``Config.retain_enrollment_key``). Either way, keeping a credential
+        the server has already refused would help nothing.
+        """
+        try:
+            secrets = Secrets.load(self.config.home)
+        except ConfigError as exc:
+            log.error("could not read stored credentials: %s", exc)
+            return False
+        if not secrets.device_token:
+            return True  # already cleared; the next tick will register
+
+        if not secrets.enrollment_key:
+            log.warning(
+                "the backend rejected our token and this laptop kept no enrollment key; "
+                "re-enrolling anyway, which works only if the backend leaves "
+                "registration open"
+            )
+        else:
+            log.warning("discarding the rejected device token and re-enrolling")
+
+        Secrets(enrollment_key=secrets.enrollment_key, device_token="").save(self.config.home)
+        if self._client is not None:
+            self._client.device_token = ""
+        self.registered = False
+        return True
 
     def _maybe_heartbeat(self, client: BackendClient) -> None:
         now = time.monotonic()
