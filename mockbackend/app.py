@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 DEFAULT_ENROLLMENT_KEY = "dev-enrollment-key"
@@ -229,6 +229,29 @@ def create_mock_backend(uploads_dir: Path | None = None, enrollment_key: str | N
             "clip_path": str(job.clip_path) if job.clip_path else None,
             "metadata": job.clip_metadata,
         }
+
+    @app.get("/admin/jobs/{job_id}/clip")
+    async def download_clip(job_id: str):
+        """Hand back the stored MP3.
+
+        ``job_status`` reports where the clip landed, but that path only means
+        anything on the machine running this mock. Whoever is integrating
+        against it is on a different machine, so without this they can see that
+        a clip arrived and still have no way to hear it.
+        """
+        job = state.jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="unknown job")
+        if job.clip_path is None or not Path(job.clip_path).exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"no clip stored for this job (status: {job.status})",
+            )
+        return FileResponse(
+            path=job.clip_path,
+            media_type="audio/mpeg",
+            filename=f"{job_id}.mp3",
+        )
 
     @app.get("/admin/devices")
     async def devices():

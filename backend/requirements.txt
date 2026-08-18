@@ -1,0 +1,7 @@
+# Backend only. Deliberately not the agent's dependency set: sounddevice and
+# numpy exist to capture audio on a laptop and would drag PortAudio into a
+# container that never records anything.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+python-multipart>=0.0.9

@@ -111,10 +111,13 @@ class BackendClient:
         installer; the token that comes back is unique to this laptop. The
         caller discards the key afterwards, so a stolen laptop cannot be used
         to enrol further devices.
-        """
-        if not enrollment_key:
-            raise AuthError("no enrollment key available to register with")
 
+        An empty key is sent as-is rather than refused here. Whether enrolment
+        needs a key is the backend's decision, not this laptop's -- a
+        deployment that leaves registration open accepts the request, and one
+        that does not answers 401, which is the same answer this method would
+        have guessed but arrived at honestly.
+        """
         payload = {
             "enrollment_key": enrollment_key,
             "install_id": self.config.install_id,

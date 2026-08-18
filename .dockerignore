@@ -1,0 +1,30 @@
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# The agent and its build output have no business in the backend image.
+ongoingrec/
+mockbackend/
+tests/
+installer/
+build/
+dist/
+docs/
+tools/
+
+# Local runtime state and secrets.
+mock-uploads/
+recordings/
+*.log
+config.json
+secrets.bin
+data/
+
+.vscode/
+.idea/
+.claude/
+.DS_Store

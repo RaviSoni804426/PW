@@ -164,6 +164,18 @@ class Config:
     heartbeat_interval_seconds: int = 300
     upload_max_attempts: int = 8
 
+    # Whether to keep the fleet enrollment key after enrolling successfully.
+    #
+    # Off by default: a laptop that has its own token no longer needs the
+    # fleet-wide key, and not storing it means a stolen laptop cannot be used
+    # to enrol further devices under someone else's employee ID.
+    #
+    # Turn it on when the backend's device records may be lost -- a redeploy
+    # onto a fresh volume, a restore from an older backup. Without the key the
+    # agent cannot re-enrol, so it sits rejected until someone reconfigures
+    # that laptop by hand; with it, the fleet heals itself.
+    retain_enrollment_key: bool = False
+
     # Audio capture. 16 kHz mono is speech-grade; 32 kbps CBR MP3 keeps a
     # 30-minute segment near 7 MB and, being constant rate, stays seekable
     # even when a file is truncated by a power loss.
