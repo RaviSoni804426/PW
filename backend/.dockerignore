@@ -1,0 +1,25 @@
+# Build context is backend/, not the repository root -- the agent, the
+# installer and the docs are simply not in scope here and need no entries.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Development-time only: the reference backend, the tests, and the packaging
+# metadata. The image installs from requirements.txt, not from pyproject.
+mockbackend/
+tests/
+pyproject.toml
+docker-compose.yml
+
+# Local runtime state and secrets.
+data/
+clips/
+mock-uploads/
+*.log
+
+.vscode/
+.idea/
+.DS_Store

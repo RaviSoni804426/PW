@@ -1,4 +1,4 @@
-# Deploying the backend to Coolify
+# Deploying the backend
 
 What gets deployed is the **backend only** — the thing counsellor laptops talk
 to. The recording agent is a Windows service and stays on the laptop; nothing
@@ -15,31 +15,54 @@ any enrolled counsellor's audio by employee ID and timestamp, from any machine.
 
 ---
 
-## 1. Create the application in Coolify
+## 1. Run the container
 
-1. **New Resource → Application**, pointed at this repository.
-2. **Build Pack: Dockerfile.** The `Dockerfile` at the repo root is the backend
-   image; it deliberately does not install the agent's audio dependencies.
-3. **Port: `8000`.**
-4. **Environment variables** — only these, and all are optional:
+The backend is a plain Docker image with one volume and no required
+configuration. Anything that runs a container will do -- `docker compose` on a
+VPS, a managed container platform, systemd with `podman`. What matters is the
+five things below, not which tool applies them.
 
-   | Variable | Value | Why |
-   |---|---|---|
-   | `DATA_DIR` | `/data` | where the database and clips live |
-   | `JOB_RETENTION_DAYS` | `30` | clips and finished jobs are deleted after this |
-   | `MAX_CLIP_MB` | `128` | largest clip a laptop may upload |
+**The build context is `backend/`, not the repository root**, because the repo
+also holds the agent and the image deliberately does not install its audio
+dependencies. On a PaaS this is usually called *Base Directory*; getting it
+wrong is the one mistake here that fails the build outright rather than
+quietly.
 
-5. **Persistent storage — do not skip this.** Add a volume mounted at `/data`.
+```bash
+docker compose -f backend/docker-compose.yml up -d
+```
 
-   Without it, every redeploy starts with an empty device table. Laptops still
-   hold tokens the new container has never seen, so clip delivery stops even
-   though recording carries on perfectly — the most confusing possible failure.
-   Section 5 covers how laptops recover if this happens anyway.
+or by hand:
 
-6. **Health check path: `/healthz`.** Carries no counsellor data, so it is safe
-   for the platform to poll.
-7. **Assign a domain.** Coolify issues the TLS certificate. Use the `https://`
-   URL everywhere from here on.
+```bash
+docker build -t ongoingrec-backend backend/
+docker run -d --name ongoingrec-backend \
+  -p 8000:8000 \
+  -v ongoingrec-data:/data \
+  ongoingrec-backend
+```
+
+What a hosted platform needs to be told, if you are not using compose:
+
+| Setting | Value | Why |
+|---|---|---|
+| Build context / base directory | `backend/` | the `Dockerfile` is not at the repo root |
+| Port | `8000` | |
+| Volume | mounted at `/data` | **do not skip** -- see below |
+| Health check path | `/healthz` | carries no counsellor data, safe to poll |
+| `DATA_DIR` | `/data` | where the database and clips live |
+| `JOB_RETENTION_DAYS` | `30` | clips and finished jobs are deleted after this |
+| `MAX_CLIP_MB` | `128` | largest clip a laptop may upload |
+
+The environment variables are all optional and already default to these values.
+The volume is not optional: without it, every redeploy starts with an empty
+device table. Laptops still hold tokens the new container has never seen, so
+clip delivery stops even though recording carries on perfectly -- the most
+confusing possible failure. Section 5 covers how laptops recover if it happens
+anyway.
+
+Put TLS in front of it -- a reverse proxy, or whatever your platform issues
+certificates with -- and use the `https://` URL everywhere from here on.
 
 Deploy, then confirm:
 
@@ -57,7 +80,7 @@ On the counsellor's laptop, in an **administrator** PowerShell:
 ```powershell
 Stop-Service OngoingRec
 
-& "C:\src\PW\.venv\Scripts\python.exe" -m ongoingrec configure `
+& "C:\src\PW\agent\.venv\Scripts\python.exe" -m ongoingrec configure `
     --email counsellor@pw.live --employee-id PW33744 `
     --backend-url https://your-domain `
     --enrollment-key open --force
@@ -123,11 +146,89 @@ audio back — typically within a second or two of the laptop picking it up.
 
 `wait_seconds` defaults to 120 and caps at 600.
 
+### Sessions: mark a window, collect its audio
+
+Start and end are given as an **IST date and clock time**, in separate fields.
+All four are required — nothing defaults to "now".
+
+```bash
+# 1. mark where it began
+curl -X POST https://your-domain/admin/sessions/start \
+  -H 'Content-Type: application/json' \
+  -d '{"employee_id":"PW33744","start_date":"2026-08-17","start_time":"14:30:00"}'
+```
+```json
+{"session_id":"ses-c400fd672649","status":"recording",
+ "start_date":"2026-08-17","start_time":"14:30:00","start_utc":"2026-08-17T09:00:00Z",
+ "end_date":null,"end_time":null,"end_utc":null,"job_id":null}
+```
+
+```bash
+# 2. mark where it ended -- the MP3 comes straight back
+curl -X POST https://your-domain/admin/sessions/end \
+  -H 'Content-Type: application/json' \
+  -d '{"employee_id":"PW33744","end_date":"2026-08-17","end_time":"15:30:00"}' \
+  --output clip.mp3
+
+# 3. or throw the marker away without collecting anything
+curl -X POST https://your-domain/admin/sessions/cancel \
+  -H 'Content-Type: application/json' -d '{"employee_id":"PW33744"}'
+```
+
+Times are IST at a fixed `+05:30`, so nothing has to be inferred and nothing
+carries a timezone suffix. Responses echo back the IST pair you sent *and* the
+UTC instant it resolved to, because the UTC is what every other endpoint,
+header and log line in this system speaks. `start_time` accepts `HH:MM:SS` or
+`HH:MM`; `start_date` is `YYYY-MM-DD` and nothing else — a lenient parser would
+read `17-08-2026` as some other real date and return audio from a day nobody
+asked for.
+
+**Nothing here starts or stops the microphone.** The agent records
+continuously regardless; a session only marks which stretch of that recording
+you intend to collect. Cancelling therefore destroys no audio, and a start may
+be in the future (it reads as `scheduled` until then).
+
+One session at a time per person. Starting a second returns `409` carrying the
+first one's state, so the caller learns what is already running:
+
+```json
+{"detail": {
+  "detail": "a recording is already in progress for PW33744, started at 2026-08-17 14:30:00 IST",
+  "session_id": "ses-c400fd672649", "status": "recording",
+  "start_date": "2026-08-17", "start_time": "14:30:00",
+  "start_utc": "2026-08-17T09:00:00Z",
+  "hint": "POST /admin/sessions/cancel to discard it and start a new one, or POST /admin/sessions/end to close it and get the audio"}}
+```
+
+| Response | Meaning |
+|---|---|
+| `201` | session opened |
+| `200` + `audio/mpeg` | the session's audio, plus `X-OngoingRec-Session-Id` |
+| `202` | laptop has not delivered yet; the `job_id` is in the body |
+| `400` | the date/time is unparseable, or the window is unusable — see below |
+| `404` | unknown identifier, nothing to cancel, or no audio for that window |
+| `409` | already started, or nothing was started |
+| `422` | a required field is missing |
+
+`400` covers the window problems, each with the reason in `detail`: an end in
+the future, ending a session whose start has not arrived yet (cancel it
+instead), an end before the start, a window under a second, and a window over
+**8 hours** — one clip's practical ceiling at 32 kbps under the 128 MB upload
+limit. For anything longer, cancel and collect it in pieces with
+`/admin/recordings/fetch`.
+
+`GET /admin/sessions?employee_id=PW33744` lists recent sessions and their
+states: `scheduled`, `recording`, `completed`, `cancelled`.
+
 ### The rest
 
 | Endpoint | Purpose |
 |---|---|
 | `GET`/`POST` `/admin/recordings/fetch` | **one step: identifier + timestamp → MP3** |
+| `POST /admin/sessions/start` | mark where the audio you want begins |
+| `POST /admin/sessions/end` | close it and get the MP3 |
+| `POST /admin/sessions/cancel` | discard the open marker |
+| `GET /admin/sessions` | recent sessions and their states |
 | `GET /admin/devices` | which laptops are enrolled and recording |
 | `POST /admin/request-clip` | queue without waiting, returns `job_id` |
 | `GET /admin/jobs/{job_id}` | `queued` → `delivered` → `complete` / `failed` |
@@ -154,7 +255,7 @@ seconds past the end of the window. A one-step fetch that takes a minute to
 return, or a job sitting at `delivered`, is correct rather than stuck.
 
 **Proxy timeouts on the one-step fetch.** It holds the HTTP request open while
-the laptop works. If Coolify's proxy closes long requests before
+the laptop works. If a reverse proxy in front of it closes long requests before
 `wait_seconds`, either raise the proxy timeout or pass a smaller
 `wait_seconds` and fall back to collecting the `202` job id — the queued work
 survives either way.
@@ -174,8 +275,8 @@ Ask for audio before the first one expires.
 
 ## 5. Turning authentication on later
 
-Nothing in the code needs to change. Set either variable in Coolify and
-redeploy:
+Nothing in the code needs to change. Set either variable in the container's
+environment and redeploy:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"

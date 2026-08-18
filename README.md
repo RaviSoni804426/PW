@@ -65,9 +65,13 @@ otherwise fills the disk), and a bearer-token enrolment scheme.
 
 Needs Python 3.11+ and ffmpeg on PATH.
 
+The repo holds two deployables, `agent/` and `backend/`, each installable on
+its own. The dev environment wants both: the agent's transport tests drive the
+real poller against the reference backend in `backend/mockbackend/`.
+
 ```bash
 python -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install -e "./agent[dev]" -e "./backend[dev]"
 
 # Prove the whole pipeline without a microphone: records watermarked audio,
 # then checks a retrieved clip decodes to the seconds that were asked for.
@@ -111,7 +115,9 @@ window exactly. That is what verifies alignment across a 30-minute boundary,
 across a recording gap, and after a clock jump.
 
 ```bash
-.venv/bin/pytest -q          # ~145 tests, about a minute
+.venv/bin/pytest -q              # both suites, 242 tests, about 70 seconds
+.venv/bin/pytest -q agent/tests  # the agent alone
+.venv/bin/pytest -q backend/tests
 ```
 
 The tests encode real MP3s, so ffmpeg has to be findable — on PATH, or via
@@ -125,23 +131,40 @@ trusted as the oracle.
 
 ## Layout
 
+The two halves ship to different places and share no code -- only the HTTP
+contract in `docs/backend-api.yaml` -- so they are separate installable
+projects rather than one package with two entry points.
+
 ```
-ongoingrec/
-  config.py          identity and settings; DPAPI-encrypted secrets
-  timeutil.py        UTC discipline, monotonic clock, boundary maths
-  index.py           SQLite index of segments and jobs
-  audio/             device discovery, capture, ffmpeg, the test watermark
-  segments.py        the recorder: rotation, gaps, crash recovery
-  extract.py         timestamp -> clip, including boundary crossing
-  retention.py       age and free-space limits
-  transport/         backend client and the outbound job poller
-  api/               loopback /health and /recordings/fetch
-  service/           supervisor + the Windows service wrapper
-mockbackend/         runnable reference backend
-installer/           PyInstaller spec and Inno Setup script
+agent/                 -> a counsellor's Windows laptop
+  ongoingrec/
+    config.py          identity and settings; DPAPI-encrypted secrets
+    timeutil.py        UTC discipline, monotonic clock, boundary maths
+    index.py           SQLite index of segments and jobs
+    audio/             device discovery, capture, ffmpeg, the test watermark
+    segments.py        the recorder: rotation, gaps, crash recovery
+    extract.py         timestamp -> clip, including boundary crossing
+    retention.py       age and free-space limits
+    transport/         backend client and the outbound job poller
+    api/               loopback /health and /recordings/fetch
+    service/           supervisor + the Windows service wrapper
+  installer/           PyInstaller spec and Inno Setup script
+  tools/               fetch_clip.py, the support-time retrieval script
+  tests/
+  pyproject.toml
+
+backend/               -> a Docker container
+  backend/             the deployed service
+  mockbackend/         runnable reference implementation of the same contract
+  Dockerfile           build context is backend/, not the repo root
+  docker-compose.yml
+  tests/
+  pyproject.toml
+
 docs/
-  backend-api.yaml   the contract the backend team implements
-  windows-setup.md   the Windows spike, build, and acceptance walkthrough
+  backend-api.yaml     the contract both sides implement
+  windows-setup.md     the Windows spike, build, and acceptance walkthrough
+  deploy-backend.md    deploying the backend container
 ```
 
 ---

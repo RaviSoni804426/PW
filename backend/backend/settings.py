@@ -1,8 +1,8 @@
 """Deployment settings, read from the environment.
 
 Everything that differs between a laptop and a hosted deployment arrives as an
-environment variable, because that is what Coolify, Docker and systemd all
-agree on.
+environment variable, because that is what every container platform, Docker
+and systemd all agree on.
 
 Both credentials are optional, so the service deploys with nothing to
 configure and anyone who has the URL can fetch a clip. That is a deliberate

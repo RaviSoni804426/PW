@@ -5,6 +5,7 @@
 # privacy configurations allow it, some return silence, some fail outright, and
 # the answer decides whether capture can live in the service at all.
 #
+#   cd agent
 #   powershell -ExecutionPolicy Bypass -File installer\session0-spike.ps1 `
 #       -FfmpegSource installer\vendor
 #

@@ -1,11 +1,17 @@
-# Coolify can deploy this file directly, or just the Dockerfile.
+# The backend, as a container. Run it from the repository root:
+#
+#   docker compose -f backend/docker-compose.yml up -d
+#
+# The build context is backend/, not the repository root -- a hosted
+# platform building the Dockerfile itself has to be told the same thing
+# (usually called "base directory").
 #
 # No credentials to configure: the service runs open, so anyone who has the URL
 # can fetch a clip. The URL is therefore the secret -- treat it like a password
 # and do not put it anywhere public.
 #
-# To gate it later, set ADMIN_API_KEY (and optionally ENROLLMENT_KEY) in
-# Coolify's environment settings and redeploy. No code change is needed.
+# To gate it later, set ADMIN_API_KEY (and optionally ENROLLMENT_KEY) in the
+# container's environment and redeploy. No code change is needed.
 #   python -c "import secrets; print(secrets.token_urlsafe(32))"
 
 services:

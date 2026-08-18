@@ -9,14 +9,16 @@ venv/
 # Build output
 build/
 dist/
-installer/Output/
+agent/installer/Output/
 # ffmpeg binaries fetched by build.ps1 (a trailing comment would become part
 # of the pattern -- gitignore only treats a line as a comment if it starts with #)
-installer/vendor/
+agent/installer/vendor/
 
 # Local runtime state
 mock-uploads/
 recordings/
+backend/data/
+backend/clips/
 *.log
 
 # Never commit these: they hold a device token and a fleet enrollment key
@@ -26,5 +28,4 @@ secrets.bin
 # Editors / OS / tooling
 .vscode/
 .idea/
-.claude/
 .DS_Store

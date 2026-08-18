@@ -1,8 +1,10 @@
 openapi: 3.0.3
 
 # The contract the central backend must implement for OngoingRec laptops to
-# talk to it. `mockbackend/` is a working reference implementation of exactly
-# this document; run it with `python -m mockbackend` to develop against.
+# talk to it. `backend/mockbackend/` is a working reference implementation of
+# exactly this document; run it with `python -m mockbackend` to develop
+# against. `backend/backend/` is the deployed implementation. A change here
+# has to land in both.
 #
 # Direction of travel: every call is made BY the laptop TO the backend. That
 # is not a style preference. Counsellor laptops are behind NAT on networks the
@@ -289,6 +291,10 @@ components:
             possible. A naive value is interpreted as the *laptop's* local
             time, which is usually what an operator means but is worth being
             explicit about for a fleet spanning timezones.
+
+            May carry fractional seconds. The window is centred on this
+            instant, so a session of an odd number of seconds puts its centre
+            on a half second; truncating that would shift the returned clip.
           example: "2026-08-12T11:22:15Z"
         window_seconds:
           type: integer

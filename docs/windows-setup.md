@@ -30,7 +30,7 @@ On the target laptop, with Python 3.11+ installed:
 
 ```powershell
 git clone <repo> C:\src\PW
-cd C:\src\PW
+cd C:\src\PW\agent          # the agent is one half of the repo; backend\ is the other
 python -m venv .venv
 .venv\Scripts\pip install -e ".[windows,dev]"
 
@@ -66,15 +66,15 @@ Set them on the service's own registry key, because services.exe caches the
 system environment at boot and would not see a machine-wide variable:
 
 ```powershell
-$site = "C:\src\PW\.venv\Lib\site-packages"
-$base = & C:\src\PW\.venv\Scripts\python.exe -c "import sys; print(sys.base_prefix)"
+$site = "C:\src\PW\agent\.venv\Lib\site-packages"
+$base = & C:\src\PW\agent\.venv\Scripts\python.exe -c "import sys; print(sys.base_prefix)"
 Set-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\OngoingRec" Environment -Type MultiString -Value @(
   # pywin32 moves pythonservice.exe into .venv\, but python311.dll stays behind
   # in the base interpreter. Without this the host dies before Python starts and
   # the only symptom is error 1053.
-  "PATH=$base;$base\DLLs;C:\src\PW\.venv\Scripts;$env:SystemRoot\system32;$env:SystemRoot",
+  "PATH=$base;$base\DLLs;C:\src\PW\agent\.venv\Scripts;$env:SystemRoot\system32;$env:SystemRoot",
   # pythonservice.exe does not read the venv's pyvenv.cfg.
-  "PYTHONPATH=C:\src\PW;$site;$site\win32;$site\win32\lib;$site\Pythonwin",
+  "PYTHONPATH=C:\src\PW\agent;$site;$site\win32;$site\win32\lib;$site\Pythonwin",
   # The shipped build finds ffmpeg beside its own executable; this one cannot.
   "ONGOINGREC_FFMPEG=<dir>\ffmpeg.exe",
   "ONGOINGREC_FFPROBE=<dir>\ffprobe.exe"
@@ -161,11 +161,11 @@ Needs, on the build machine:
 * Internet access the first time, to fetch ffmpeg
 
 ```powershell
-cd C:\src\PW
+cd C:\src\PW\agent
 powershell -ExecutionPolicy Bypass -File installer\build.ps1
 ```
 
-This produces `installer\Output\OngoingRec-Setup.exe`. The script downloads
+This produces `agent\installer\Output\OngoingRec-Setup.exe`. The script downloads
 ffmpeg, freezes the service with PyInstaller, smoke-tests the resulting
 executable, and compiles the installer.
 
@@ -179,7 +179,7 @@ The installer is unsigned, so SmartScreen will warn on first run and some
 managed environments will block it entirely. Before any real rollout:
 
 ```powershell
-signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f cert.pfx installer\Output\OngoingRec-Setup.exe
+signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f cert.pfx agent\installer\Output\OngoingRec-Setup.exe
 ```
 
 ---

@@ -1,14 +1,15 @@
 # Central backend for PW OngoingRec.
 #
-#   docker build -t ongoingrec-backend .
+# Build context is this directory, not the repository root:
+#   docker build -t ongoingrec-backend backend/
 #   docker run -p 8000:8000 -v ongoingrec-data:/data ongoingrec-backend
 #
 # It runs open: no credentials to set, and anyone with the URL can fetch a
 # clip. Set ADMIN_API_KEY to gate the admin surface if that changes.
 #
-# The recording agent is NOT in this image. It is a Windows service that runs
-# on a counsellor's laptop; this container only receives what those laptops
-# send it.
+# The recording agent is NOT in this image -- it lives in ../agent and is a
+# Windows service that runs on a counsellor's laptop. This container only
+# receives what those laptops send it.
 
 FROM python:3.11-slim
 
@@ -20,7 +21,7 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Dependencies first, so a code change does not re-run the install layer.
-COPY backend/requirements.txt ./requirements.txt
+COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./backend/

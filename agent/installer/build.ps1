@@ -1,11 +1,12 @@
-# Build OngoingRec-Setup.exe. Run from the repository root on Windows.
+# Build OngoingRec-Setup.exe. Run from the agent/ directory on Windows.
 #
+#   cd agent
 #   powershell -ExecutionPolicy Bypass -File installer\build.ps1
 #
 # PyInstaller does not cross-compile, so this must run on Windows (a local
 # machine or a windows-latest CI runner). It produces:
-#   dist\OngoingRec\           the frozen service and its dependencies
-#   installer\Output\OngoingRec-Setup.exe
+#   agent\dist\OngoingRec\           the frozen service and its dependencies
+#   agent\installer\Output\OngoingRec-Setup.exe
 
 param(
     [switch]$SkipFfmpeg,
@@ -17,7 +18,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-Write-Host "==> Building OngoingRec in $root" -ForegroundColor Cyan
+Write-Host "==> Building the OngoingRec agent in $root" -ForegroundColor Cyan
 
 # --- 1. Python environment -------------------------------------------------
 

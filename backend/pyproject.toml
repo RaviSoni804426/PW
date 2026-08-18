@@ -1,0 +1,32 @@
+# The central backend, plus the reference implementation of its own contract.
+#
+# `backend` is what ships in the Docker image. `mockbackend` is the runnable
+# reference for docs/backend-api.yaml -- it stays here, next to the thing it
+# mirrors, so the two cannot drift apart unnoticed, and it is excluded from the
+# image by .dockerignore.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ongoingrec-backend"
+version = "0.1.0"
+description = "PW OngoingRec central backend - device enrolment, clip jobs, and retrieval"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+include = ["backend*", "mockbackend*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

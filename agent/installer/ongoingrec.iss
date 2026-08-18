@@ -6,7 +6,7 @@
 ; for automatic start, and starts it. From then on the service loads what was
 ; written here and never prompts again.
 ;
-; Build with:  iscc installer\ongoingrec.iss
+; Build with:  iscc installer\ongoingrec.iss   (from agent/)
 ; (build.ps1 produces dist\OngoingRec\ first)
 
 #define AppName "PW OngoingRec"
